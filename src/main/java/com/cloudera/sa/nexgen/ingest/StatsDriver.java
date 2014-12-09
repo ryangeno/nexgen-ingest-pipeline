@@ -59,13 +59,14 @@ public class StatsDriver extends Configured implements Tool, Serializable {
                     @Override
                     public Pair<String, Pair<Long, String>> map(String input) {
                     String[] configFields = input.split(",");
-                    String key = configFields[0]
-                            + "," + configFields[1]
-                            + "," + configFields[10]
-                            + "," + configFields[8];
-                    String value = configFields[14];
-                    Long pos = Long.parseLong(configFields[17]);
-                    return Pair.of(key, Pair.of(pos, value));
+                    String key = configFields[0] // customer
+                            + "," + configFields[1] // provider
+                            + "," + configFields[11]; // group
+//                            + "," + configFields[8]; // version
+                    Long metricPos = Long.parseLong(configFields[16]); // metric position
+                    String value = configFields[7] // record length
+                            + "," + configFields[14]; // metric name
+                    return Pair.of(key, Pair.of(metricPos, value));
                 }
             }, Writables.tableOf(Writables.strings(), Writables.pairs(Writables.longs(), Writables.strings())));
 
@@ -77,8 +78,8 @@ public class StatsDriver extends Configured implements Tool, Serializable {
                         String[] rawStatsFields = input.split(",");
                         String key = "Samsung"
                                 + "," + "Sprint"
-                                + "," + rawStatsFields[0].replace("\"", "")
-                                + "," + rawStatsFields[1];
+                                + "," + rawStatsFields[0].replace("\"", ""); // group
+//                                + "," + rawStatsFields[1]; // version
                         String value = key
                                 + "," + input;
                         return Pair.of(key, value);
@@ -88,7 +89,7 @@ public class StatsDriver extends Configured implements Tool, Serializable {
         // load the Avro schema
         // TODO: read from HDFS
 //        Schema statsSchema = new Schema.Parser().parse(new File("src/main/avro/min15_c_num_qci.avsc"));
-
+        Pair<PCollection<String>, PCollection<String>> = x;
 
         // flatten config field names
         PTable<String, String> parsedConfigTable = SecondarySort.sortAndApply(keyedConfigTable,
@@ -96,12 +97,15 @@ public class StatsDriver extends Configured implements Tool, Serializable {
                     @Override
                     public void process(Pair<String, Iterable<Pair<Long, String>>> sortedConfigs, Emitter<Pair<String, String>> emitter) {
                         Iterator<Pair<Long, String>> configs = sortedConfigs.second().iterator();
+                        String recordLength = null;
                         StringBuilder fields = new StringBuilder();
                         while (configs.hasNext()) {
-                            String fieldName = configs.next().second();
-                            fields.append(fieldName + "|");
+                            String splits[] = configs.next().second().split(",");
+                            recordLength = splits[0];
+                            String metricName = splits[1];
+                            fields.append(metricName + "|");
                         }
-                        emitter.emit(Pair.of(sortedConfigs.first(), fields.toString().substring(0, fields.length()-1)));
+                        emitter.emit(Pair.of(sortedConfigs.first(), recordLength + "," + fields.toString().substring(0, fields.length()-1)));
                     }
                 }, Writables.tableOf(Writables.strings(), Writables.strings()));
 
