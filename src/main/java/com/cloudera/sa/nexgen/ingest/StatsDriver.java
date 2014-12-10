@@ -1,18 +1,20 @@
 package com.cloudera.sa.nexgen.ingest;
 
+import com.cloudera.sa.nexgen.avro.Active_E_RAB_Number_15m;
+import org.apache.avro.Schema;
 import org.apache.crunch.DoFn;
 import org.apache.crunch.Emitter;
 import org.apache.crunch.MapFn;
 import org.apache.crunch.PCollection;
 import org.apache.crunch.PTable;
-import org.apache.crunch.PGroupedTable;
 import org.apache.crunch.Pair;
 import org.apache.crunch.Pipeline;
 import org.apache.crunch.PipelineResult;
 import org.apache.crunch.Target.WriteMode;
 import org.apache.crunch.impl.mr.MRPipeline;
-import org.apache.crunch.io.At;
+import org.apache.crunch.io.avro.AvroFileTarget;
 import org.apache.crunch.lib.SecondarySort;
+import org.apache.crunch.types.avro.Avros;
 import org.apache.crunch.types.writable.Writables;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
@@ -31,6 +33,49 @@ import java.util.Iterator;
  */
 public class StatsDriver extends Configured implements Tool, Serializable {
 
+    public static PCollection<Active_E_RAB_Number_15m> doWorkSon(final PTable<String, Pair<String, String>> joinedConfigRawStatsTable) {
+        final Schema statsSchema = new Schema.Parser().parse("{\n" +
+                "\t\"type\" : \"record\",\n" +
+                "\t\"name\" : \"Active_E_RAB_Number_15m\",\n" +
+                "\t\"fields\" : [\n" +
+                "\t\t{\"name\" : \"MMEName\", \"type\" : [\"string\", \"null\"]},\n" +
+                "\t\t{\"name\" : \"SWRelease\", \"type\" : [\"string\", \"null\"]},\n" +
+                "\t\t{\"name\" : \"ENodeBId\", \"type\" : [\"int\", \"null\"]},\n" +
+                "\t\t{\"name\" : \"ENodeBName\", \"type\" : [\"string\", \"null\"]},\n" +
+                "\t\t{\"name\" : \"RecordTimestamp\", \"type\" : [\"string\", \"null\"]},\n" +
+                "\t\t{\"name\" : \"CNum\", \"type\" : [\"string\", \"null\"]},\n" +
+                "\t\t{\"name\" : \"QCI\", \"type\" : [\"string\", \"null\"]},\n" +
+                "        {\"name\" : \"UsageNbrAvg\", \"type\" : [\"float\", \"null\"]},\n" +
+                "\t\t{\"name\" : \"UsageNbrMax\", \"type\" : [\"float\", \"null\"]},\n" +
+                "\t\t{\"name\" : \"UsageNbrTot\", \"type\" : [\"float\", \"null\"]},\n" +
+                "\t\t{\"name\" : \"UsageNbrCnt\", \"type\" : [\"int\", \"null\"]}\n" +
+                "\t]\n" +
+                "}");
+
+        return joinedConfigRawStatsTable.parallelDo(
+                new DoFn<Pair<String, Pair<String, String>>, Active_E_RAB_Number_15m>() {
+                    @Override
+                    public void process(Pair<String, Pair<String, String>> rawStats, Emitter<Active_E_RAB_Number_15m> emitter) {
+
+                        String configFields[] = rawStats.second().first().split(",");
+                        String schemaName = configFields[0];
+                        String addToSchemaFlag[] = configFields[1].split("|");
+                        String fieldName[] = configFields[2].split("|");
+                        String statsFields[] = rawStats.second().second().split(",");
+
+                        Active_E_RAB_Number_15m statsRecord = new Active_E_RAB_Number_15m();
+                        for (int i = 0; i < statsFields.length; i++) {
+                            if(addToSchemaFlag[i].equals("Y")) {
+                                statsRecord.put(fieldName[i], statsFields[i]);
+                            }
+                        }
+
+                        emitter.emit(statsRecord);
+                    }
+                }, Avros.specifics(Active_E_RAB_Number_15m.class)
+        );
+    }
+
     public int run(String[] args) throws Exception {
         if(args.length != 3) {
             System.err.println(args.length);
@@ -40,6 +85,9 @@ public class StatsDriver extends Configured implements Tool, Serializable {
             GenericOptionsParser.printGenericCommandUsage(System.err);
             return 1;
         }
+
+
+
 
         // Get raw stats input path and output paths
         final String rawStatsInputPath = args[0];
@@ -53,25 +101,39 @@ public class StatsDriver extends Configured implements Tool, Serializable {
         final PCollection<String> rawStatsFiles = pipeline.readTextFile(rawStatsInputPath);
         final PCollection<String> configFile = pipeline.readTextFile(configDriverInputPath);
 
+
         // create a keyed config table
-        PTable<String, Pair<Long, String>> keyedConfigTable = configFile.parallelDo(
-            new MapFn<String, Pair<String, Pair<Long, String>>>() {
-                    @Override
-                    public Pair<String, Pair<Long, String>> map(String input) {
-                    String[] configFields = input.split(",");
-                    String key = configFields[0] // customer
-                            + "," + configFields[1] // provider
-                            + "," + configFields[11]; // group
-//                            + "," + configFields[8]; // version
-                    Long metricPos = Long.parseLong(configFields[16]); // metric position
-                    String value = configFields[7] // record length
-                            + "," + configFields[14]; // metric name
-                    return Pair.of(key, Pair.of(metricPos, value));
+        PTable<String, Pair<Long, String>> configTable = configFile.parallelDo(
+            new DoFn<String, Pair<String, Pair<Long, String>>>() {
+                @Override
+                public void process(String input, Emitter<Pair<String, Pair<Long, String>>> emitter) {
+                    String[] configFields = input.split(",", -1);
+                    if(!configFields[3].isEmpty()) {
+                        String key = configFields[0] // network
+                                + "," + configFields[1] // provider
+                                + "," + configFields[2]; // group
+                        //                            + "," + configFields[8]; // version
+
+                        Long metricPos = Long.parseLong(configFields[10]); // metric position
+
+                        String schemaName = configFields[12]; // table name
+                        String metricLoadFlag = configFields[9]; // metric load flag
+
+                        String metricName;
+                        if(metricLoadFlag.equals("Y")) {
+                            metricName = configFields[13]; // metric name
+                        } else {
+                            metricName = "None";
+                        }
+
+                        emitter.emit(Pair.of(key, Pair.of(metricPos, schemaName + "," + metricLoadFlag + "," + metricName)));
+                    }
                 }
             }, Writables.tableOf(Writables.strings(), Writables.pairs(Writables.longs(), Writables.strings())));
 
+
         // create a keyed stats table
-        PTable<String, String> keyedRawStatsTable = rawStatsFiles.parallelDo(
+        PTable<String, String> rawStatsTable = rawStatsFiles.parallelDo(
                 new MapFn<String, Pair<String, String>>() {
                     @Override
                     public Pair<String, String> map(String input) {
@@ -86,51 +148,43 @@ public class StatsDriver extends Configured implements Tool, Serializable {
                     }
                 }, Writables.tableOf(Writables.strings(), Writables.strings()));
 
-        // load the Avro schema
-        // TODO: read from HDFS
-//        Schema statsSchema = new Schema.Parser().parse(new File("src/main/avro/min15_c_num_qci.avsc"));
-        Pair<PCollection<String>, PCollection<String>> = x;
 
         // flatten config field names
-        PTable<String, String> parsedConfigTable = SecondarySort.sortAndApply(keyedConfigTable,
+        PTable<String, String> flattenedConfigTable = SecondarySort.sortAndApply(configTable,
                 new DoFn<Pair<String, Iterable<Pair<Long, String>>>, Pair<String, String>>() {
                     @Override
                     public void process(Pair<String, Iterable<Pair<Long, String>>> sortedConfigs, Emitter<Pair<String, String>> emitter) {
                         Iterator<Pair<Long, String>> configs = sortedConfigs.second().iterator();
-                        String recordLength = null;
-                        StringBuilder fields = new StringBuilder();
+                        String tableName = null;
+                        StringBuilder concatMetricLoadFlag = new StringBuilder();
+                        StringBuilder concatMetricName = new StringBuilder();
                         while (configs.hasNext()) {
                             String splits[] = configs.next().second().split(",");
-                            recordLength = splits[0];
-                            String metricName = splits[1];
-                            fields.append(metricName + "|");
+                            tableName = splits[0];
+                            String metricLoadFlag = splits[1];
+                            String metricName = splits[2];
+                            concatMetricName.append(metricName + "|");
+                            concatMetricLoadFlag.append(metricLoadFlag + "|");
                         }
-                        emitter.emit(Pair.of(sortedConfigs.first(), recordLength + "," + fields.toString().substring(0, fields.length()-1)));
+                        emitter.emit(Pair.of(sortedConfigs.first(), tableName + "," + concatMetricLoadFlag.toString().substring(0, concatMetricLoadFlag.length()-1) + "," + concatMetricName.toString().substring(0, concatMetricName.length()-1)));
                     }
                 }, Writables.tableOf(Writables.strings(), Writables.strings()));
 
         // join the raw stats and config tables, group by key
-        PGroupedTable<String, Pair<String, String>> joinedConfigRawStatsTable = parsedConfigTable.join(keyedRawStatsTable).groupByKey();
+//        PGroupedTable<String, Pair<String, String>> joinedConfigRawStatsTable = parsedConfigTable.join(keyedRawStatsTable).groupByKey();
+        PTable<String, Pair<String, String>> joinedConfigRawStatsTable = flattenedConfigTable.join(rawStatsTable);
+
+
 
         // group stats by output dir
-//        PTable<String, PCollection<String>> parsedStats = joinedConfigRawStatsTable.parallelDo(
-//                new DoFn<Pair<String, Iterable<Pair<String, String>>>, Pair<String, PCollection<String>>>() {
-//                    @Override
-//                    public void process(Pair<String, Iterable<Pair<String, String>>> keyedStats, Emitter<Pair<String, PCollection<String>>> emitter) {
-//                        Iterator<Pair<String, String>> stats = keyedStats.second().iterator();
-//                        StringBuilder fields = new StringBuilder();
-//                        while (configs.hasNext()) {
-//                            String fieldName = configs.next().second();
-//                            fields.append(fieldName + "|");
-//                        }
-//                        emitter.emit(Pair.of(sortedConfigs.first(), fields.toString().substring(0, fields.length()-1)));
-//                    }
-//                }, Writables.tableOf(Writables.strings(), Writables.strings()));
+        PCollection<Active_E_RAB_Number_15m> stats = doWorkSon(joinedConfigRawStatsTable);
 
 
 //        pipeline.writeTextFile(join, outputPath);
-        joinedConfigRawStatsTable.write(At.textFile(outputPath), WriteMode.OVERWRITE);
-
+//        pipeline.write(stats, new AvroPathPerKeyTarget("hdfs://nameservice1/projects/netiq/dev/data/work/test_rg"),WriteMode.OVERWRITE)
+//        stats.groupByKey().write(new AvroPathPerKeyTarget("hdfs://nameservice1/projects/netiq/dev/data/work/test_rg"),WriteMode.OVERWRITE);
+//        joinedConfigRawStatsTable.write(At.textFile(outputPath), WriteMode.OVERWRITE);
+        pipeline.write(stats, new AvroFileTarget("hdfs://nameservice1/projects/netiq/dev/data/work/test_rg"),WriteMode.OVERWRITE);
 
 
         // run the pipeline!
