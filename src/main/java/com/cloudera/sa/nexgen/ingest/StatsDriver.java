@@ -1,7 +1,5 @@
 package com.cloudera.sa.nexgen.ingest;
 
-import com.cloudera.sa.nexgen.avro.Active_E_RAB_Number_15m;
-import org.apache.avro.Schema;
 import org.apache.crunch.DoFn;
 import org.apache.crunch.Emitter;
 import org.apache.crunch.MapFn;
@@ -12,9 +10,9 @@ import org.apache.crunch.Pipeline;
 import org.apache.crunch.PipelineResult;
 import org.apache.crunch.Target.WriteMode;
 import org.apache.crunch.impl.mr.MRPipeline;
-import org.apache.crunch.io.avro.AvroFileTarget;
+import org.apache.crunch.io.text.TextFileTarget;
+import org.apache.crunch.lib.Channels;
 import org.apache.crunch.lib.SecondarySort;
-import org.apache.crunch.types.avro.Avros;
 import org.apache.crunch.types.writable.Writables;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
@@ -33,66 +31,23 @@ import java.util.Iterator;
  */
 public class StatsDriver extends Configured implements Tool, Serializable {
 
-    public static PCollection<Active_E_RAB_Number_15m> doWorkSon(final PTable<String, Pair<String, String>> joinedConfigRawStatsTable) {
-        final Schema statsSchema = new Schema.Parser().parse("{\n" +
-                "\t\"type\" : \"record\",\n" +
-                "\t\"name\" : \"Active_E_RAB_Number_15m\",\n" +
-                "\t\"fields\" : [\n" +
-                "\t\t{\"name\" : \"MMEName\", \"type\" : [\"string\", \"null\"]},\n" +
-                "\t\t{\"name\" : \"SWRelease\", \"type\" : [\"string\", \"null\"]},\n" +
-                "\t\t{\"name\" : \"ENodeBId\", \"type\" : [\"int\", \"null\"]},\n" +
-                "\t\t{\"name\" : \"ENodeBName\", \"type\" : [\"string\", \"null\"]},\n" +
-                "\t\t{\"name\" : \"RecordTimestamp\", \"type\" : [\"string\", \"null\"]},\n" +
-                "\t\t{\"name\" : \"CNum\", \"type\" : [\"string\", \"null\"]},\n" +
-                "\t\t{\"name\" : \"QCI\", \"type\" : [\"string\", \"null\"]},\n" +
-                "        {\"name\" : \"UsageNbrAvg\", \"type\" : [\"float\", \"null\"]},\n" +
-                "\t\t{\"name\" : \"UsageNbrMax\", \"type\" : [\"float\", \"null\"]},\n" +
-                "\t\t{\"name\" : \"UsageNbrTot\", \"type\" : [\"float\", \"null\"]},\n" +
-                "\t\t{\"name\" : \"UsageNbrCnt\", \"type\" : [\"int\", \"null\"]}\n" +
-                "\t]\n" +
-                "}");
-
-        return joinedConfigRawStatsTable.parallelDo(
-                new DoFn<Pair<String, Pair<String, String>>, Active_E_RAB_Number_15m>() {
-                    @Override
-                    public void process(Pair<String, Pair<String, String>> rawStats, Emitter<Active_E_RAB_Number_15m> emitter) {
-
-                        String configFields[] = rawStats.second().first().split(",");
-                        String schemaName = configFields[0];
-                        String addToSchemaFlag[] = configFields[1].split("|");
-                        String fieldName[] = configFields[2].split("|");
-                        String statsFields[] = rawStats.second().second().split(",");
-
-                        Active_E_RAB_Number_15m statsRecord = new Active_E_RAB_Number_15m();
-                        for (int i = 0; i < statsFields.length; i++) {
-                            if(addToSchemaFlag[i].equals("Y")) {
-                                statsRecord.put(fieldName[i], statsFields[i]);
-                            }
-                        }
-
-                        emitter.emit(statsRecord);
-                    }
-                }, Avros.specifics(Active_E_RAB_Number_15m.class)
-        );
-    }
-
     public int run(String[] args) throws Exception {
-        if(args.length != 3) {
+        if(args.length != 4) {
             System.err.println(args.length);
-            System.err.println("Two and only two arguments are accepted.");
+            System.err.println("Four arguments are accepted.");
             System.err.println("Usage: " + this.getClass().getName() + " [generic options] input output");
             System.err.println();
             GenericOptionsParser.printGenericCommandUsage(System.err);
             return 1;
         }
 
-
-
-
         // Get raw stats input path and output paths
         final String rawStatsInputPath = args[0];
         final String configDriverInputPath = args[1];
         final String outputPath = args[2];
+        final String groupingName = args[3];
+
+        String tableName = groupingName.replaceAll("[^a-zA-Z0-9]", "_") + "_15m";
 
         // Create an instance of Pipeline by providing ClassName and the job configuration.
         final Pipeline pipeline = new MRPipeline(StatsDriver.class, new Configuration());
@@ -104,32 +59,32 @@ public class StatsDriver extends Configured implements Tool, Serializable {
 
         // create a keyed config table
         PTable<String, Pair<Long, String>> configTable = configFile.parallelDo(
-            new DoFn<String, Pair<String, Pair<Long, String>>>() {
-                @Override
-                public void process(String input, Emitter<Pair<String, Pair<Long, String>>> emitter) {
-                    String[] configFields = input.split(",", -1);
-                    if(!configFields[3].isEmpty()) {
-                        String key = configFields[0] // network
-                                + "," + configFields[1] // provider
-                                + "," + configFields[2]; // group
-                        //                            + "," + configFields[8]; // version
+                new DoFn<String, Pair<String, Pair<Long, String>>>() {
+                    @Override
+                    public void process(String input, Emitter<Pair<String, Pair<Long, String>>> emitter) {
+                        String[] configFields = input.split(",", -1);
+                        if(configFields[3].equals("Y")) {
+                            String key = configFields[0] // network
+                                    + "," + configFields[1] // provider
+                                    + "," + configFields[4]; // group
+                            //                            + "," + configFields[8]; // version
 
-                        Long metricPos = Long.parseLong(configFields[10]); // metric position
+                            Long filePos = Long.parseLong(configFields[11]); // metric position
+                            String targetTableName = configFields[5]; // table name
+                            String metricLoadFlag = configFields[6]; // metric load flag
+                            String recordLength = configFields[9]; // metric load flag
 
-                        String schemaName = configFields[12]; // table name
-                        String metricLoadFlag = configFields[9]; // metric load flag
+//                            String metricName;
+//                            if(metricLoadFlag.equals("Y")) {
+//                                metricName = configFields[13]; // metric name
+//                            } else {
+//                                metricName = "None";
+//                            }
 
-                        String metricName;
-                        if(metricLoadFlag.equals("Y")) {
-                            metricName = configFields[13]; // metric name
-                        } else {
-                            metricName = "None";
+                            emitter.emit(Pair.of(key, Pair.of(filePos, targetTableName + "," + metricLoadFlag + "," + recordLength)));
                         }
-
-                        emitter.emit(Pair.of(key, Pair.of(metricPos, schemaName + "," + metricLoadFlag + "," + metricName)));
                     }
-                }
-            }, Writables.tableOf(Writables.strings(), Writables.pairs(Writables.longs(), Writables.strings())));
+                }, Writables.tableOf(Writables.strings(), Writables.pairs(Writables.longs(), Writables.strings())));
 
 
         // create a keyed stats table
@@ -137,13 +92,12 @@ public class StatsDriver extends Configured implements Tool, Serializable {
                 new MapFn<String, Pair<String, String>>() {
                     @Override
                     public Pair<String, String> map(String input) {
-                        String[] rawStatsFields = input.split(",");
+                        String[] rawStatsFields = input.split(",", -1);
                         String key = "Samsung"
                                 + "," + "Sprint"
                                 + "," + rawStatsFields[0].replace("\"", ""); // group
 //                                + "," + rawStatsFields[1]; // version
-                        String value = key
-                                + "," + input;
+                        String value = input;
                         return Pair.of(key, value);
                     }
                 }, Writables.tableOf(Writables.strings(), Writables.strings()));
@@ -157,48 +111,99 @@ public class StatsDriver extends Configured implements Tool, Serializable {
                         Iterator<Pair<Long, String>> configs = sortedConfigs.second().iterator();
                         String tableName = null;
                         StringBuilder concatMetricLoadFlag = new StringBuilder();
-                        StringBuilder concatMetricName = new StringBuilder();
+                        String recordLength = null;
+//                        StringBuilder concatMetricName = new StringBuilder();
                         while (configs.hasNext()) {
                             String splits[] = configs.next().second().split(",");
                             tableName = splits[0];
                             String metricLoadFlag = splits[1];
-                            String metricName = splits[2];
-                            concatMetricName.append(metricName + "|");
+                            recordLength = splits[2];
+//                            String metricName = splits[2];
+//                            concatMetricName.append(metricName + "|");
                             concatMetricLoadFlag.append(metricLoadFlag + "|");
                         }
-                        emitter.emit(Pair.of(sortedConfigs.first(), tableName + "," + concatMetricLoadFlag.toString().substring(0, concatMetricLoadFlag.length()-1) + "," + concatMetricName.toString().substring(0, concatMetricName.length()-1)));
+                        emitter.emit(Pair.of(sortedConfigs.first(), tableName + "," + concatMetricLoadFlag.toString().substring(0, concatMetricLoadFlag.length()-1) + "," + recordLength));
                     }
                 }, Writables.tableOf(Writables.strings(), Writables.strings()));
 
-        // join the raw stats and config tables, group by key
-//        PGroupedTable<String, Pair<String, String>> joinedConfigRawStatsTable = parsedConfigTable.join(keyedRawStatsTable).groupByKey();
+        // join the raw stats and config tables
         PTable<String, Pair<String, String>> joinedConfigRawStatsTable = flattenedConfigTable.join(rawStatsTable);
 
+        // Validate raw data based on the config data
+        PCollection<Pair<String, String>> errCheckedStats = joinedConfigRawStatsTable.parallelDo(
+                new DoFn<Pair<String, Pair<String, String>>, Pair<String, String>>() {
+                    @Override
+                    public void process(Pair<String, Pair<String, String>> input, Emitter<Pair<String, String>> emitter) {
+                        Long recordLength = Long.parseLong(input.second().first().split(",")[2]);
+                        String data = input.second().second();
+                        String[] fields = data.split(",");
+                        String goodData = null;
+                        String badData = null;
 
+                        // Row length from the config and the actual row length in the data
+                        if (recordLength == fields.length) {
+                            // Good data
+                            goodData = data;
+                        }
+                        else {
+                            // Bad data
+                            badData = data;
+                        }
+                        emitter.emit(Pair.of(input.second().first() + "\t" + goodData, badData));
+                    }
+                }, Writables.pairs(Writables.strings(), Writables.strings()));
+//
+        Pair<PCollection<String>, PCollection<String>> split = Channels.split(errCheckedStats);
+        PCollection<String> goodData = split.first();
+        PCollection<String> badData = split.second();
 
         // group stats by output dir
-        PCollection<Active_E_RAB_Number_15m> stats = doWorkSon(joinedConfigRawStatsTable);
+        PCollection<String> stats = goodData.parallelDo(
+                new DoFn<String, String>() {
 
+                    @Override
+                    public void process(String input, Emitter<String> emitter) {
 
-//        pipeline.writeTextFile(join, outputPath);
-//        pipeline.write(stats, new AvroPathPerKeyTarget("hdfs://nameservice1/projects/netiq/dev/data/work/test_rg"),WriteMode.OVERWRITE)
-//        stats.groupByKey().write(new AvroPathPerKeyTarget("hdfs://nameservice1/projects/netiq/dev/data/work/test_rg"),WriteMode.OVERWRITE);
-//        joinedConfigRawStatsTable.write(At.textFile(outputPath), WriteMode.OVERWRITE);
-        pipeline.write(stats, new AvroFileTarget("hdfs://nameservice1/projects/netiq/dev/data/work/test_rg"),WriteMode.OVERWRITE);
+                        // Split left configs and right stats data
+                        String configRecords = input.split("\t")[0];
+                        String rawStatsRecords = input.split("\t")[1];
+
+                        // get group from key
+                        String groupType = rawStatsRecords.split(",")[0].replace("\"", "");
+
+                        // set table and metric load flags
+                        String configFields[] = configRecords.split(",");
+//                        String tableName = configFields[0];
+                        String metricLoadFlags[] = configFields[1].split("\\|");
+//                        String fieldName[] = configFields[2].split("\\|");
+
+                        // get raw stats
+                        String rawStatsFields[] = rawStatsRecords.split(",");
+
+                        StringBuilder statsRecord = new StringBuilder();
+                        statsRecord.append("SJSLSM1" + ",");
+
+                        if(groupType.equals(groupingName)) {
+                            for (int i = 0; i < rawStatsFields.length; i++) {
+                                if(metricLoadFlags[i].equals("TRUE")) {
+                                    statsRecord.append(rawStatsFields[i] + ",");
+                                }
+                            }
+
+                            emitter.emit(statsRecord.toString().substring(0, statsRecord.length()-1));
+                        };
+                    }
+                }, Writables.strings()
+        );
+
+        pipeline.write(stats, new TextFileTarget(outputPath + "/" + tableName), WriteMode.OVERWRITE);
+        pipeline.write(badData, new TextFileTarget(outputPath + "/" + "bad_records"), WriteMode.APPEND);
 
 
         // run the pipeline!
         PipelineResult result = pipeline.done();
 
         return result.succeeded() ? 0 : 1;
-
-//        rootdir/A
-//        (A, A some stuff)
-//        (A, A others)
-//        rootdir/B
-//        (B, B stuff)
-//avro specifics
-
 
     }
 
