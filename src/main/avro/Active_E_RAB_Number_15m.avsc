@@ -2,17 +2,16 @@
 	"type" : "record",
 	"name" : "Active_E_RAB_Number_15m",
 	"fields" : [
-		{"name" : "MMEName", "type" : ["string", "null"]},
-		{"name" : "SWRelease", "type" : ["string", "null"]},
-		{"name" : "ENodeBId", "type" : ["int", "null"]},
-		{"name" : "ENodeBName", "type" : ["string", "null"]},
-		{"name" : "RecordTimestamp", "type" : ["string", "null"]},
-		{"name" : "CNum", "type" : ["string", "null"]},
-		{"name" : "QCI", "type" : ["string", "null"]},
+		{"name" : "mme_name", "type" : ["string", "null"]},
+		{"name" : "enodeb_ver", "type" : ["string", "null"]},
+		{"name" : "enodeb_id", "type" : ["int", "null"]},
+		{"name" : "enodeb_name", "type" : ["string", "null"]},
+		{"name" : "data_time", "type" : ["string", "null"]},
+		{"name" : "cnum", "type" : ["string", "null"]},
+		{"name" : "qci", "type" : ["string", "null"]},
         {"name" : "UsageNbrAvg", "type" : ["float", "null"]},
 		{"name" : "UsageNbrMax", "type" : ["float", "null"]},
 		{"name" : "UsageNbrTot", "type" : ["float", "null"]},
 		{"name" : "UsageNbrCnt", "type" : ["int", "null"]}
 	]
 }
-

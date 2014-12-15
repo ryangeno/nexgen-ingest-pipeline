@@ -47,7 +47,8 @@ public class StatsDriver extends Configured implements Tool, Serializable {
         final String outputPath = args[2];
         final String groupingName = args[3];
 
-        String tableName = groupingName.replaceAll("[^a-zA-Z0-9]", "_") + "_15m";
+        String tableName = groupingName.replace("\"", "").replaceAll("[^a-zA-Z0-9]", "_") + "_15m".toLowerCase();
+        final String cleanGroupName = groupingName.replaceAll("[^a-zA-Z0-9]", "").toLowerCase();
 
         // Create an instance of Pipeline by providing ClassName and the job configuration.
         final Pipeline pipeline = new MRPipeline(StatsDriver.class, new Configuration());
@@ -63,7 +64,7 @@ public class StatsDriver extends Configured implements Tool, Serializable {
                     @Override
                     public void process(String input, Emitter<Pair<String, Pair<Long, String>>> emitter) {
                         String[] configFields = input.split(",", -1);
-                        if(configFields[3].equals("Y")) {
+                        if(configFields[3].equals("TRUE")) {
                             String key = configFields[0] // network
                                     + "," + configFields[1] // provider
                                     + "," + configFields[4]; // group
@@ -126,6 +127,7 @@ public class StatsDriver extends Configured implements Tool, Serializable {
                     }
                 }, Writables.tableOf(Writables.strings(), Writables.strings()));
 
+
         // join the raw stats and config tables
         PTable<String, Pair<String, String>> joinedConfigRawStatsTable = flattenedConfigTable.join(rawStatsTable);
 
@@ -169,7 +171,7 @@ public class StatsDriver extends Configured implements Tool, Serializable {
                         String rawStatsRecords = input.split("\t")[1];
 
                         // get group from key
-                        String groupType = rawStatsRecords.split(",")[0].replace("\"", "");
+                        String groupType = rawStatsRecords.split(",")[0].replace("\"", "").replaceAll("[^a-zA-Z0-9]", "").toLowerCase();
 
                         // set table and metric load flags
                         String configFields[] = configRecords.split(",");
@@ -183,7 +185,7 @@ public class StatsDriver extends Configured implements Tool, Serializable {
                         StringBuilder statsRecord = new StringBuilder();
                         statsRecord.append("SJSLSM1" + ",");
 
-                        if(groupType.equals(groupingName)) {
+                        if(groupType.equals(cleanGroupName)) {
                             for (int i = 0; i < rawStatsFields.length; i++) {
                                 if(metricLoadFlags[i].equals("TRUE")) {
                                     statsRecord.append(rawStatsFields[i] + ",");
@@ -196,9 +198,8 @@ public class StatsDriver extends Configured implements Tool, Serializable {
                 }, Writables.strings()
         );
 
-        pipeline.write(stats, new TextFileTarget(outputPath + "/" + tableName), WriteMode.OVERWRITE);
+        pipeline.write(stats, new TextFileTarget(outputPath + "/tmp_" + tableName.toLowerCase()), WriteMode.OVERWRITE);
         pipeline.write(badData, new TextFileTarget(outputPath + "/" + "bad_records"), WriteMode.APPEND);
-
 
         // run the pipeline!
         PipelineResult result = pipeline.done();
